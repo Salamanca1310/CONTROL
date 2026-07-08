@@ -285,8 +285,8 @@ tfoot td{padding:12px 14px;font-family:var(--disp);font-weight:600;background:va
       <section class="page" id="page-reportes">
         <div class="grid kpis" id="repKpis" style="grid-template-columns:repeat(4,1fr)"></div>
         <div class="card" style="margin-bottom:16px">
-          <div class="card-h"><h3>Resumen de IVA del período</h3><span style="color:var(--muted);font-size:12px">Régimen El Salvador</span></div>
-          <div class="card-b" id="ivaBox" style="display:grid;grid-template-columns:repeat(3,1fr);gap:16px"></div>
+          <div class="card-h"><h3>Resultado por unidad de negocio</h3><span style="color:var(--muted);font-size:12px">del período</span></div>
+          <div class="card-b" id="unitBox" style="padding-top:6px"></div>
         </div>
         <div class="section-title">Exportar y respaldar <span class="ln"></span></div>
         <div class="card">
@@ -300,6 +300,20 @@ tfoot td{padding:12px 14px;font-family:var(--disp);font-weight:600;background:va
             <input type="file" id="restoreFile" accept="application/json" style="display:none">
           </div>
         </div>
+        <div class="section-title" style="margin-top:22px">Respaldo automático <span class="ln"></span></div>
+        <div class="card" style="margin-bottom:16px">
+          <div class="card-b">
+            <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+              <span class="tag v dot" style="padding:4px 11px">Copias en el navegador: activas</span>
+              <span style="color:var(--muted);font-size:12.5px">Se guardan solas al cambiar de día y cuando hay muchos cambios.</span>
+            </div>
+            <label class="check" id="autoDlToggle" style="margin-top:14px;max-width:520px"><input type="checkbox" id="cfgAutoDl"> Descargar también un archivo de respaldo (.json) automáticamente, una vez al día</label>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-h"><h3>Historial de copias</h3><span style="color:var(--muted);font-size:12px">últimas guardadas</span></div>
+          <div class="card-b"><ul class="mini-list" id="snapList"></ul></div>
+        </div>
       </section>
       <section class="page" id="page-config">
         <div class="grid cfg-grid">
@@ -307,12 +321,8 @@ tfoot td{padding:12px 14px;font-family:var(--disp);font-weight:600;background:va
             <div class="card-h"><h3>Datos de la empresa</h3></div>
             <div class="card-b">
               <div class="field"><label>Nombre</label><input class="inp" id="cfgName" style="width:100%"></div>
-              <div class="field-row">
-                <div class="field"><label>Símbolo de moneda</label><input class="inp" id="cfgCur" style="width:100%"></div>
-                <div class="field"><label>Tasa de IVA <span class="hint">(%)</span></label><input class="inp" id="cfgIva" type="number" step="0.01" style="width:100%"></div>
-              </div>
-              <label class="check" style="margin-top:4px"><input type="checkbox" id="cfgInc"> Los precios de venta ya incluyen IVA</label>
-              <button class="btn btn-primary" id="saveCfg" style="margin-top:16px">Guardar cambios</button>
+              <div class="field"><label>Símbolo de moneda</label><input class="inp" id="cfgCur" style="width:100%"></div>
+              <button class="btn btn-primary" id="saveCfg" style="margin-top:8px">Guardar cambios</button>
             </div>
           </div>
           <div class="card">
@@ -365,7 +375,7 @@ tfoot td{padding:12px 14px;font-family:var(--disp);font-weight:600;background:va
 const LS_KEY='CVG_v1';
 const uid=()=>Date.now().toString(36)+Math.random().toString(36).slice(2,7);
 const DEFAULTS={
-  cfg:{name:'Mi Empresa',cur:'$',iva:13,pricesIncludeIva:true},
+  cfg:{name:'Mi Empresa',cur:'$',autoDownload:false},
   unidades:['Cafetería','Panadería','CAPI','Uniformes'],
   catVenta:['Alimentos y bebidas','Productos horneados','Mercadería','Uniformes','Servicios','Otros'],
   catGasto:['Compras / Mercadería','Sueldos y salarios','Servicios básicos','Alquiler','Insumos','Mantenimiento','Impuestos','Transporte','Otros'],
@@ -374,7 +384,41 @@ const DEFAULTS={
 };
 let S=load();
 function load(){try{const r=JSON.parse(localStorage.getItem(LS_KEY));if(r&&r.cfg)return r;}catch(e){}return JSON.parse(JSON.stringify(DEFAULTS));}
-function save(){localStorage.setItem(LS_KEY,JSON.stringify(S));}
+function save(){localStorage.setItem(LS_KEY,JSON.stringify(S));maybeSnapshot();maybeAutoDownload();}
+/* ---- Respaldo automático ---- */
+const SNAP_KEY='CVG_snaps',META_KEY='CVG_meta';
+function getSnaps(){try{return JSON.parse(localStorage.getItem(SNAP_KEY))||[];}catch(e){return[];}}
+function setSnaps(a){try{localStorage.setItem(SNAP_KEY,JSON.stringify(a));}catch(e){while(a.length>3){a.shift();try{localStorage.setItem(SNAP_KEY,JSON.stringify(a));return;}catch(e2){}}}}
+function getMeta(){try{return JSON.parse(localStorage.getItem(META_KEY))||{};}catch(e){return{};}}
+function setMeta(m){try{localStorage.setItem(META_KEY,JSON.stringify(m));}catch(e){}}
+function maybeSnapshot(){
+  const snaps=getSnaps();
+  const last=snaps[snaps.length-1];
+  const count=S.ventas.length+S.gastos.length;
+  const today=todayStr();
+  const newDay=!last||last.day!==today;
+  const bigDelta=last&&Math.abs(count-last.count)>=15;
+  if(!last||newDay||bigDelta){
+    snaps.push({ts:Date.now(),day:today,count:count,data:JSON.stringify(S)});
+    while(snaps.length>12)snaps.shift();
+    setSnaps(snaps);
+  }else{
+    last.ts=Date.now();last.count=count;last.data=JSON.stringify(S);setSnaps(snaps);
+  }
+}
+function maybeAutoDownload(){
+  if(!S.cfg.autoDownload)return;
+  if(S.ventas.length+S.gastos.length===0)return;
+  const m=getMeta();
+  if(m.lastAutoDL===todayStr())return;
+  doBackup(true);m.lastAutoDL=todayStr();setMeta(m);
+}
+function doBackup(auto){
+  const blob=new Blob([JSON.stringify(S,null,2)],{type:'application/json'});
+  const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='respaldo_CVG_'+todayStr()+'.json';
+  document.body.appendChild(a);a.click();a.remove();
+  toast(auto?'Respaldo automático descargado':'Respaldo descargado');
+}
 const $=s=>document.querySelector(s);
 const $$=s=>document.querySelectorAll(s);
 const fmt=n=>S.cfg.cur+(Number(n)||0).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
@@ -382,12 +426,6 @@ const fmt0=n=>S.cfg.cur+Math.round(Number(n)||0).toLocaleString('en-US');
 const esc=s=>String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const todayStr=()=>new Date().toISOString().slice(0,10);
 function fdate(d){const p=d.split('-');return p[2]+'/'+p[1]+'/'+p[0].slice(2);}
-function ivaBreak(total,afecto){
-  if(!afecto)return{base:total,iva:0,total:total};
-  const rate=S.cfg.iva/100;
-  if(S.cfg.pricesIncludeIva){const base=total/(1+rate);return{base:base,iva:total-base,total:total};}
-  const iva=total*rate;return{base:total,iva:iva,total:total+iva};
-}
 function toast(msg,type){type=type||'ok';
   const el=document.createElement('div');el.className='toast '+type;
   const ic=type==='ok'?'<path d="M20 6L9 17l-5-5"/>':'<circle cx="12" cy="12" r="10"/><path d="M12 8v4m0 4h.01"/>';
@@ -413,7 +451,7 @@ function periodRange(){
 function inRange(d){const r=periodRange();return d>=r[0]&&d<=r[1];}
 function ventasIn(){return S.ventas.filter(v=>inRange(v.fecha));}
 function gastosIn(){return S.gastos.filter(g=>inRange(g.fecha));}
-const TITLES={dashboard:['Resumen','Panorama de ventas, gastos y utilidad'],ventas:['Ventas','Registro detallado de ingresos'],gastos:['Gastos','Registro detallado de egresos'],reportes:['Reportes','Análisis, IVA y exportación'],config:['Configuración','Empresa, unidades y categorías']};
+const TITLES={dashboard:['Resumen','Panorama de ventas, gastos y utilidad'],ventas:['Ventas','Registro detallado de ingresos'],gastos:['Gastos','Registro detallado de egresos'],reportes:['Reportes','Resultado por unidad y exportación'],config:['Configuración','Empresa, unidades y categorías']};
 function goto(page){
   $$('.nav a').forEach(a=>a.classList.toggle('active',a.dataset.page===page));
   $$('.page').forEach(p=>p.classList.remove('active'));
@@ -539,7 +577,7 @@ function renderVentas(){
   const q=$('#searchV').value.toLowerCase(),fu=$('#fUnitV').value,fc=$('#fCatV').value;
   let rows=S.ventas.filter(v=>(!fu||v.unidad===fu)&&(!fc||v.categoria===fc)&&(!q||[v.descripcion,v.cliente,v.documento,v.categoria].join(' ').toLowerCase().includes(q)));
   rows=sortRows(rows,sortState.ventas);
-  const cols=[['fecha','Fecha'],['unidad','Unidad'],['descripcion','Producto / Detalle'],['categoria','Categoría'],['cantidad','Cant.','num'],['total','Total','num'],['metodo','Pago'],['documento','Doc.']];
+  const cols=[['fecha','Fecha'],['unidad','Unidad'],['descripcion','Producto / Detalle'],['categoria','Categoría'],['cantidad','Cant.','num'],['total','Total','num'],['metodo','Pago'],['documento','Ref.']];
   $('#ventasTable').innerHTML=buildTable(rows,cols,'ventas','v');
   bindTable('ventas');
 }
@@ -548,7 +586,7 @@ function renderGastos(){
   const q=$('#searchG').value.toLowerCase(),fu=$('#fUnitG').value,fc=$('#fCatG').value;
   let rows=S.gastos.filter(g=>(!fu||g.unidad===fu)&&(!fc||g.categoria===fc)&&(!q||[g.descripcion,g.proveedor,g.documento,g.categoria].join(' ').toLowerCase().includes(q)));
   rows=sortRows(rows,sortState.gastos);
-  const cols=[['fecha','Fecha'],['unidad','Unidad'],['proveedor','Proveedor'],['descripcion','Concepto'],['categoria','Categoría'],['total','Monto','num'],['metodo','Pago'],['documento','Doc.']];
+  const cols=[['fecha','Fecha'],['unidad','Unidad'],['proveedor','Proveedor'],['descripcion','Concepto'],['categoria','Categoría'],['total','Monto','num'],['metodo','Pago'],['documento','Ref.']];
   $('#gastosTable').innerHTML=buildTable(rows,cols,'gastos','g');
   bindTable('gastos');
 }
@@ -608,10 +646,9 @@ function openForm(type,id){
     '<div class="field"><label>Categoría</label><select id="f_cat">'+opt(cats,rec&&rec.categoria)+'</select></div></div>'+
     '<div class="field-row-3"><div class="field"><label>Método de pago</label><select id="f_metodo">'+opt(S.metodos,rec&&rec.metodo)+'</select></div>'+
     '<div class="field"><label>Cliente <span class="hint">(opcional)</span></label><input id="f_cliente" value="'+esc(rec&&rec.cliente||'')+'"></div>'+
-    '<div class="field"><label>N° Documento / DTE <span class="hint">(opcional)</span></label><input id="f_doc" value="'+esc(rec&&rec.documento||'')+'"></div></div>'+
-    '<label class="check"><input type="checkbox" id="f_afecto" '+(rec?(rec.afecto?'checked':''):'checked')+'> Afecto a IVA ('+S.cfg.iva+'%)</label>'+
-    '<div class="field" style="margin-top:14px"><label>Notas <span class="hint">(opcional)</span></label><textarea id="f_notas">'+esc(rec&&rec.notas||'')+'</textarea></div>'+
-    '<div class="calc-box"><div><span class="g">Base + IVA</span><br><span id="cBase" class="g"></span> + <span id="cIva" class="g"></span></div><div style="text-align:right"><span class="g">Total</span><br><span class="big" id="cTot"></span></div></div>'
+    '<div class="field"><label>Referencia <span class="hint">(opcional)</span></label><input id="f_doc" placeholder="N° de recibo, nota…" value="'+esc(rec&&rec.documento||'')+'"></div></div>'+
+    '<div class="field" style="margin-top:2px"><label>Notas <span class="hint">(opcional)</span></label><textarea id="f_notas">'+esc(rec&&rec.notas||'')+'</textarea></div>'+
+    '<div class="calc-box"><div><span class="g">Cantidad × precio</span></div><div style="text-align:right"><span class="g">Total</span><br><span class="big" id="cTot"></span></div></div>'
   :
     '<div class="field-row"><div class="field"><label>Fecha</label><input type="date" id="f_fecha" value="'+(rec?rec.fecha:todayStr())+'"></div>'+
     '<div class="field"><label>Unidad de negocio</label><select id="f_unidad">'+opt(S.unidades,rec&&rec.unidad)+'</select></div></div>'+
@@ -620,37 +657,31 @@ function openForm(type,id){
     '<div class="field"><label>Concepto / detalle</label><input id="f_desc" placeholder="Ej. Compra de harina" value="'+esc(rec&&rec.descripcion||'')+'"></div>'+
     '<div class="field-row-3"><div class="field"><label>Monto</label><input type="number" id="f_precio" step="0.01" min="0" value="'+(rec?rec.total:'')+'" placeholder="0.00"></div>'+
     '<div class="field"><label>Método de pago</label><select id="f_metodo">'+opt(S.metodos,rec&&rec.metodo)+'</select></div>'+
-    '<div class="field"><label>N° Documento <span class="hint">(opcional)</span></label><input id="f_doc" value="'+esc(rec&&rec.documento||'')+'"></div></div>'+
-    '<label class="check"><input type="checkbox" id="f_afecto" '+(rec?(rec.afecto?'checked':''):'checked')+'> Con crédito fiscal / IVA ('+S.cfg.iva+'%)</label>'+
-    '<div class="field" style="margin-top:14px"><label>Notas <span class="hint">(opcional)</span></label><textarea id="f_notas">'+esc(rec&&rec.notas||'')+'</textarea></div>'+
-    '<div class="calc-box"><div><span class="g">Base + IVA crédito</span><br><span id="cBase" class="g"></span> + <span id="cIva" class="g"></span></div><div style="text-align:right"><span class="g">Total</span><br><span class="big" id="cTot"></span></div></div>';
+    '<div class="field"><label>Referencia <span class="hint">(opcional)</span></label><input id="f_doc" placeholder="N° de recibo, nota…" value="'+esc(rec&&rec.documento||'')+'"></div></div>'+
+    '<div class="field" style="margin-top:2px"><label>Notas <span class="hint">(opcional)</span></label><textarea id="f_notas">'+esc(rec&&rec.notas||'')+'</textarea></div>'+
+    '<div class="calc-box"><div><span class="g">Monto del gasto</span></div><div style="text-align:right"><span class="g">Total</span><br><span class="big" id="cTot"></span></div></div>';
   openModal((id?'Editar ':'Nueva ')+(isV?'venta':'gasto'),body,[
     {label:'Cancelar',cls:'btn-ghost',fn:closeModal},
     {label:id?'Guardar cambios':'Guardar',cls:isV?'btn-primary':'btn-danger',fn:()=>saveForm(type,id)}
   ]);
   const upd=()=>{
-    const afecto=$('#f_afecto').checked;
     const raw=isV?(parseFloat($('#f_cant').value)||0)*(parseFloat($('#f_precio').value)||0):(parseFloat($('#f_precio').value)||0);
-    const b=ivaBreak(raw,afecto);
-    $('#cBase').textContent=fmt(b.base);$('#cIva').textContent=fmt(b.iva);$('#cTot').textContent=fmt(b.total);
+    $('#cTot').textContent=fmt(raw);
   };
-  ['f_cant','f_precio','f_afecto'].forEach(i=>{const el=$('#'+i);if(el){el.oninput=upd;el.onchange=upd;}});
+  ['f_cant','f_precio'].forEach(i=>{const el=$('#'+i);if(el){el.oninput=upd;el.onchange=upd;}});
   upd();
 }
 function saveForm(type,id){
   const isV=type==='ventas';
-  const afecto=$('#f_afecto').checked;
   const precio=parseFloat($('#f_precio').value)||0;
   if(precio<=0){toast(isV?'Ingresa un precio válido':'Ingresa un monto válido','err');return;}
   let rec;
   if(isV){
     const cant=parseFloat($('#f_cant').value)||0;
     if(cant<=0){toast('La cantidad debe ser mayor a 0','err');return;}
-    const b=ivaBreak(cant*precio,afecto);
-    rec={id:id||uid(),fecha:$('#f_fecha').value,unidad:$('#f_unidad').value,descripcion:$('#f_desc').value.trim()||'(sin detalle)',categoria:$('#f_cat').value,cantidad:cant,precio:precio,base:b.base,iva:b.iva,total:b.total,afecto:afecto,metodo:$('#f_metodo').value,cliente:$('#f_cliente').value.trim(),documento:$('#f_doc').value.trim(),notas:$('#f_notas').value.trim()};
+    rec={id:id||uid(),fecha:$('#f_fecha').value,unidad:$('#f_unidad').value,descripcion:$('#f_desc').value.trim()||'(sin detalle)',categoria:$('#f_cat').value,cantidad:cant,precio:precio,total:cant*precio,metodo:$('#f_metodo').value,cliente:$('#f_cliente').value.trim(),documento:$('#f_doc').value.trim(),notas:$('#f_notas').value.trim()};
   }else{
-    const b=ivaBreak(precio,afecto);
-    rec={id:id||uid(),fecha:$('#f_fecha').value,unidad:$('#f_unidad').value,proveedor:$('#f_prov').value.trim()||'—',categoria:$('#f_cat').value,descripcion:$('#f_desc').value.trim()||'(sin detalle)',base:b.base,iva:b.iva,total:b.total,afecto:afecto,metodo:$('#f_metodo').value,documento:$('#f_doc').value.trim(),notas:$('#f_notas').value.trim()};
+    rec={id:id||uid(),fecha:$('#f_fecha').value,unidad:$('#f_unidad').value,proveedor:$('#f_prov').value.trim()||'—',categoria:$('#f_cat').value,descripcion:$('#f_desc').value.trim()||'(sin detalle)',total:precio,metodo:$('#f_metodo').value,documento:$('#f_doc').value.trim(),notas:$('#f_notas').value.trim()};
   }
   const arr=S[type];
   if(id){const i=arr.findIndex(x=>x.id===id);arr[i]=rec;}else arr.push(rec);
@@ -683,35 +714,62 @@ function renderReportes(){
   const V=ventasIn(),G=gastosIn();
   const totV=V.reduce((s,x)=>s+x.total,0),totG=G.reduce((s,x)=>s+x.total,0);
   const util=totV-totG;
-  const ivaDeb=V.reduce((s,x)=>s+(x.iva||0),0);
-  const ivaCred=G.reduce((s,x)=>s+(x.iva||0),0);
-  const ivaPag=ivaDeb-ivaCred;
+  const nOps=V.length+G.length;
   const k=[
     {c:'ingreso',lbl:'Ventas',v:fmt(totV),m:V.length+' operaciones'},
     {c:'gasto',lbl:'Gastos',v:fmt(totG),m:G.length+' operaciones'},
-    {c:'utilidad',lbl:'Utilidad',v:fmt(util),m:(totV?(util/totV*100).toFixed(1):'0')+'% margen'},
-    {c:'info',lbl:'IVA a pagar',v:fmt(ivaPag),m:ivaPag>=0?'a favor de Hacienda':'crédito a favor'}
+    {c:'utilidad',lbl:'Utilidad',v:fmt(util),m:(util>=0?'ganancia':'pérdida')+' del período'},
+    {c:'info',lbl:'Margen',v:(totV?(util/totV*100).toFixed(1):'0')+'%',m:nOps+' movimientos'}
   ];
   $('#repKpis').innerHTML=k.map(x=>'<div class="kpi '+x.c+'"><div class="lbl">'+x.lbl+'</div><div class="val tnum">'+x.v+'</div><div class="meta">'+x.m+'</div></div>').join('');
-  $('#ivaBox').innerHTML=
-    '<div><div style="color:var(--muted);font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.05em">IVA Débito (ventas)</div><div class="tnum" style="font-family:var(--disp);font-size:22px;font-weight:600;color:var(--primary);margin-top:6px">'+fmt(ivaDeb)+'</div></div>'+
-    '<div><div style="color:var(--muted);font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.05em">IVA Crédito (compras)</div><div class="tnum" style="font-family:var(--disp);font-size:22px;font-weight:600;color:var(--danger);margin-top:6px">'+fmt(ivaCred)+'</div></div>'+
-    '<div><div style="color:var(--muted);font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.05em">IVA Resultante</div><div class="tnum" style="font-family:var(--disp);font-size:22px;font-weight:600;color:var(--gold);margin-top:6px">'+fmt(ivaPag)+'</div></div>';
+  $('#cfgAutoDl').checked=!!S.cfg.autoDownload;
+  renderSnaps();
+  // Resultado por unidad
+  const um={};
+  S.unidades.forEach(u=>um[u]={v:0,g:0});
+  V.forEach(x=>{(um[x.unidad]=um[x.unidad]||{v:0,g:0}).v+=x.total;});
+  G.forEach(x=>{(um[x.unidad]=um[x.unidad]||{v:0,g:0}).g+=x.total;});
+  const rows=Object.entries(um).filter(e=>e[1].v||e[1].g).sort((a,b)=>(b[1].v-b[1].g)-(a[1].v-a[1].g));
+  if(!rows.length){$('#unitBox').innerHTML='<div class="empty" style="padding:30px 0"><span>Sin movimientos en el período</span></div>';return;}
+  const body=rows.map(e=>{const ut=e[1].v-e[1].g;const mg=e[1].v?(ut/e[1].v*100).toFixed(1):'0';
+    return '<tr><td><span class="tag dot">'+esc(e[0])+'</span></td><td class="num" style="color:var(--primary)">'+fmt(e[1].v)+'</td><td class="num" style="color:var(--danger)">'+fmt(e[1].g)+'</td><td class="num" style="color:var(--gold);font-weight:600">'+fmt(ut)+'</td><td class="num">'+mg+'%</td></tr>';}).join('');
+  $('#unitBox').innerHTML='<div class="tbl-wrap" style="box-shadow:none"><table><thead><tr><th>Unidad</th><th class="num">Ventas</th><th class="num">Gastos</th><th class="num">Utilidad</th><th class="num">Margen</th></tr></thead><tbody>'+body+'</tbody><tfoot><tr><td>Total</td><td class="num">'+fmt(totV)+'</td><td class="num">'+fmt(totG)+'</td><td class="num">'+fmt(util)+'</td><td class="num">'+(totV?(util/totV*100).toFixed(1):'0')+'%</td></tr></tfoot></table></div>';
 }
-function ventasRows(){return ventasIn().map(v=>({Fecha:v.fecha,Unidad:v.unidad,Producto:v.descripcion,Categoria:v.categoria,Cantidad:v.cantidad,PrecioUnit:v.precio,Base:+v.base.toFixed(2),IVA:+v.iva.toFixed(2),Total:+v.total.toFixed(2),MetodoPago:v.metodo,Cliente:v.cliente,Documento:v.documento,Notas:v.notas}));}
-function gastosRows(){return gastosIn().map(g=>({Fecha:g.fecha,Unidad:g.unidad,Proveedor:g.proveedor,Concepto:g.descripcion,Categoria:g.categoria,Base:+g.base.toFixed(2),IVACredito:+g.iva.toFixed(2),Total:+g.total.toFixed(2),MetodoPago:g.metodo,Documento:g.documento,Notas:g.notas}));}
+function renderSnaps(){
+  const el=$('#snapList');if(!el)return;
+  const snaps=getSnaps().slice().reverse();
+  if(!snaps.length){el.innerHTML='<li style="color:var(--muted);justify-content:center">Aún no hay copias. Se crean solas al registrar movimientos.</li>';return;}
+  el.innerHTML=snaps.map(s=>{
+    const d=new Date(s.ts);
+    const f=('0'+d.getDate()).slice(-2)+'/'+('0'+(d.getMonth()+1)).slice(-2)+'/'+String(d.getFullYear()).slice(2)+' '+('0'+d.getHours()).slice(-2)+':'+('0'+d.getMinutes()).slice(-2);
+    return '<li><span class="rank"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" width="13" height="13"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><path d="M7 10l5 5 5-5M12 15V3"/></svg></span>'+
+      '<span class="nm">'+f+'<div class="sub">'+s.count+' movimientos</div></span>'+
+      '<span style="display:flex;gap:6px"><button class="btn btn-ghost btn-sm" data-snapdl="'+s.ts+'">Descargar</button><button class="btn btn-ghost btn-sm" data-snap="'+s.ts+'">Restaurar</button></span></li>';
+  }).join('');
+  el.querySelectorAll('[data-snap]').forEach(b=>b.onclick=()=>{
+    const s=getSnaps().find(x=>x.ts==b.dataset.snap);if(!s)return;
+    confirmModalOk('Restaurar copia','Esto reemplazará los datos actuales por la copia del '+new Date(s.ts).toLocaleString('es-SV')+'. ¿Continuar?',()=>{S=JSON.parse(s.data);save();toast('Copia restaurada');goto('reportes');});
+  });
+  el.querySelectorAll('[data-snapdl]').forEach(b=>b.onclick=()=>{
+    const s=getSnaps().find(x=>x.ts==b.dataset.snapdl);if(!s)return;
+    const blob=new Blob([s.data],{type:'application/json'});
+    const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='copia_CVG_'+new Date(s.ts).toISOString().slice(0,10)+'.json';document.body.appendChild(a);a.click();a.remove();
+    toast('Copia descargada');
+  });
+}
+function ventasRows(){return ventasIn().map(v=>({Fecha:v.fecha,Unidad:v.unidad,Producto:v.descripcion,Categoria:v.categoria,Cantidad:v.cantidad,PrecioUnit:+(v.precio||0).toFixed(2),Total:+v.total.toFixed(2),MetodoPago:v.metodo,Cliente:v.cliente,Referencia:v.documento,Notas:v.notas}));}
+function gastosRows(){return gastosIn().map(g=>({Fecha:g.fecha,Unidad:g.unidad,Proveedor:g.proveedor,Concepto:g.descripcion,Categoria:g.categoria,Total:+g.total.toFixed(2),MetodoPago:g.metodo,Referencia:g.documento,Notas:g.notas}));}
 function periodLabel(){return periodRange().join('_a_');}
 $('#expExcel').onclick=()=>{
   const V=ventasIn(),G=gastosIn();
   if(!V.length&&!G.length){toast('No hay datos en el período','err');return;}
   const wb=XLSX.utils.book_new();
   const totV=V.reduce((s,x)=>s+x.total,0),totG=G.reduce((s,x)=>s+x.total,0);
-  const ivaD=V.reduce((s,x)=>s+x.iva,0),ivaC=G.reduce((s,x)=>s+x.iva,0);
   const resumen=[
     {Concepto:'Empresa',Valor:S.cfg.name},{Concepto:'Periodo',Valor:periodRange().join(' a ')},
+    {Concepto:'N Ventas',Valor:V.length},{Concepto:'N Gastos',Valor:G.length},
     {Concepto:'Total Ventas',Valor:+totV.toFixed(2)},{Concepto:'Total Gastos',Valor:+totG.toFixed(2)},
-    {Concepto:'Utilidad',Valor:+(totV-totG).toFixed(2)},{Concepto:'Margen %',Valor:totV?+((totV-totG)/totV*100).toFixed(2):0},
-    {Concepto:'IVA Debito',Valor:+ivaD.toFixed(2)},{Concepto:'IVA Credito',Valor:+ivaC.toFixed(2)},{Concepto:'IVA a pagar',Valor:+(ivaD-ivaC).toFixed(2)}
+    {Concepto:'Utilidad',Valor:+(totV-totG).toFixed(2)},{Concepto:'Margen %',Valor:totV?+((totV-totG)/totV*100).toFixed(2):0}
   ];
   XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(resumen),'Resumen');
   if(V.length)XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(ventasRows()),'Ventas');
@@ -728,11 +786,13 @@ function downloadCSV(rows,name){
 }
 $('#expCsvV').onclick=()=>downloadCSV(ventasRows(),'Ventas');
 $('#expCsvG').onclick=()=>downloadCSV(gastosRows(),'Gastos');
-$('#backupBtn').onclick=()=>{
-  const blob=new Blob([JSON.stringify(S,null,2)],{type:'application/json'});
-  const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='respaldo_CVG_'+todayStr()+'.json';a.click();
-  toast('Respaldo descargado');
-};
+$('#backupBtn').onclick=()=>doBackup(false);
+document.addEventListener('change',e=>{
+  if(e.target.id==='cfgAutoDl'){
+    S.cfg.autoDownload=e.target.checked;save();
+    toast(e.target.checked?'Descarga automática activada':'Descarga automática desactivada');
+  }
+});
 $('#restoreBtn').onclick=()=>$('#restoreFile').click();
 $('#restoreFile').onchange=e=>{
   const f=e.target.files[0];if(!f)return;
@@ -743,7 +803,7 @@ $('#restoreFile').onchange=e=>{
   r.readAsText(f);e.target.value='';
 };
 function renderConfig(){
-  $('#cfgName').value=S.cfg.name;$('#cfgCur').value=S.cfg.cur;$('#cfgIva').value=S.cfg.iva;$('#cfgInc').checked=S.cfg.pricesIncludeIva;
+  $('#cfgName').value=S.cfg.name;$('#cfgCur').value=S.cfg.cur;
   chips('#chipsUnit','unidades');chips('#chipsCatV','catVenta');chips('#chipsCatG','catGasto');chips('#chipsPay','metodos');
 }
 function chips(sel,key){
@@ -756,8 +816,6 @@ function chips(sel,key){
 $('#saveCfg').onclick=()=>{
   S.cfg.name=$('#cfgName').value.trim()||'Mi Empresa';
   S.cfg.cur=$('#cfgCur').value.trim()||'$';
-  S.cfg.iva=parseFloat($('#cfgIva').value)||0;
-  S.cfg.pricesIncludeIva=$('#cfgInc').checked;
   save();$('#brandName').textContent=S.cfg.name;toast('Configuración guardada');
 };
 $$('[data-add]').forEach(btn=>btn.onclick=()=>{
@@ -782,12 +840,11 @@ function seed(){
     const nV=Math.floor(rnd(4,9));
     for(let i=0;i<nV;i++){
       const u=pick(S.unidades);const desc=pick(prod[u]||['Venta']);const cant=Math.floor(rnd(1,6));const precio=+rnd(0.5,12).toFixed(2);
-      const b=ivaBreak(cant*precio,true);
-      S.ventas.push({id:uid(),fecha:fecha,unidad:u,descripcion:desc,categoria:pick(S.catVenta),cantidad:cant,precio:precio,base:b.base,iva:b.iva,total:b.total,afecto:true,metodo:pick(S.metodos),cliente:'',documento:'',notas:''});
+      S.ventas.push({id:uid(),fecha:fecha,unidad:u,descripcion:desc,categoria:pick(S.catVenta),cantidad:cant,precio:precio,total:+(cant*precio).toFixed(2),metodo:pick(S.metodos),cliente:'',documento:'',notas:''});
     }
     if(d%2===0){
-      const monto=+rnd(30,250).toFixed(2);const b=ivaBreak(monto,true);
-      S.gastos.push({id:uid(),fecha:fecha,unidad:pick(S.unidades),proveedor:pick(provs),descripcion:'Compra de insumos',categoria:pick(S.catGasto),base:b.base,iva:b.iva,total:b.total,afecto:true,metodo:pick(['Efectivo','Transferencia','Crédito']),documento:'CCF-'+Math.floor(rnd(1000,9999)),notas:''});
+      const monto=+rnd(30,250).toFixed(2);
+      S.gastos.push({id:uid(),fecha:fecha,unidad:pick(S.unidades),proveedor:pick(provs),descripcion:'Compra de insumos',categoria:pick(S.catGasto),total:monto,metodo:pick(['Efectivo','Transferencia','Crédito']),documento:'',notas:''});
     }
   }
 }
